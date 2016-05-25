@@ -10,6 +10,8 @@ import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
 import org.kohsuke.stapler.interceptor.Interceptor;
 import org.kohsuke.stapler.interceptor.InterceptorAnnotation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletResponse;
@@ -46,6 +48,8 @@ import static org.kohsuke.stapler.HttpResponses.errorWithoutStack;
 @InterceptorAnnotation(RequirePostWithGHHookPayload.Processor.class)
 public @interface RequirePostWithGHHookPayload {
     class Processor extends Interceptor {
+
+        private static final Logger LOGGER = LoggerFactory.getLogger(GitHubWebHook.class);
 
         @Override
         public Object invoke(StaplerRequest req, StaplerResponse rsp, Object instance, Object[] arguments)
@@ -123,6 +127,7 @@ public @interface RequirePostWithGHHookPayload {
          */
         private void isTrue(boolean condition, String msg) throws InvocationTargetException {
             if (!condition) {
+                LOGGER.error(msg);
                 throw new InvocationTargetException(errorWithoutStack(SC_BAD_REQUEST, msg));
             }
         }

@@ -6,6 +6,7 @@ import hudson.model.AbstractProject;
 import hudson.model.Job;
 import hudson.triggers.Trigger;
 import jenkins.model.ParameterizedJobMixIn;
+import net.sf.json.JSONObject;
 
 import java.util.Collection;
 import java.util.Set;
@@ -22,7 +23,7 @@ public interface GitHubTrigger {
     void onPost();
 
     // TODO: document me
-    void onPost(String triggeredByUser);
+    void onPost(JSONObject postJson);
 
     /**
      * Obtains the list of the repositories that this trigger is looking at.
