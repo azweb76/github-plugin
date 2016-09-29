@@ -7,6 +7,7 @@ import hudson.model.Job;
 import hudson.triggers.Trigger;
 import jenkins.model.ParameterizedJobMixIn;
 import net.sf.json.JSONObject;
+import org.kohsuke.github.GHEvent;
 
 import java.util.Collection;
 import java.util.Set;
@@ -23,7 +24,7 @@ public interface GitHubTrigger {
     void onPost();
 
     // TODO: document me
-    void onPost(JSONObject postJson);
+    void onPost(JSONObject postJson, GHEvent event, GitHubRepositoryName changedRepository);
 
     /**
      * Obtains the list of the repositories that this trigger is looking at.

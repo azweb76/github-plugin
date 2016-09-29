@@ -44,7 +44,7 @@ public class GitHubRepositoryName {
              * The first set of patterns extract the host, owner and repository names
              * from URLs that include a '.git' suffix, removing the suffix from the
              * repository name.
-             */
+            */
             Pattern.compile("git@(.+):([^/]+)/([^/]+)\\.git"),
             Pattern.compile("https?://[^/]+@([^/]+)/([^/]+)/([^/]+)\\.git"),
             Pattern.compile("https?://([^/]+)/([^/]+)/([^/]+)\\.git"),
@@ -55,10 +55,11 @@ public class GitHubRepositoryName {
              * from all other URLs. Note that these patterns must be processed *after*
              * the first set, to avoid any '.git' suffix that may be present being included
              * in the repository name.
-             */
+            */
             Pattern.compile("git@(.+):([^/]+)/([^/]+)/?"),
             Pattern.compile("https?://[^/]+@([^/]+)/([^/]+)/([^/]+)/?"),
             Pattern.compile("https?://([^/]+)/([^/]+)/([^/]+)/?"),
+            Pattern.compile("https?://([^/]+)/api/v3/repos/([^/]+)/([^/]+)/?"),
             Pattern.compile("git://([^/]+)/([^/]+)/([^/]+)/?"),
             Pattern.compile("ssh://(?:git@)?([^/]+)/([^/]+)/([^/]+)/?")
     };
@@ -210,11 +211,12 @@ public class GitHubRepositoryName {
                 .append("host", host).append("username", userName).append("repository", repositoryName).build();
     }
 
-    private static Function<GitHub, GHRepository> toGHRepository(final GitHubRepositoryName repoName) {
+    public static Function<GitHub, GHRepository> toGHRepository(final GitHubRepositoryName repoName) {
         return new NullSafeFunction<GitHub, GHRepository>() {
             @Override
             protected GHRepository applyNullSafe(@Nonnull GitHub gitHub) {
                 try {
+                    LOGGER.info("gitHub {}", gitHub);
                     return gitHub.getRepository(format("%s/%s", repoName.getUserName(), repoName.getRepositoryName()));
                 } catch (IOException e) {
                     LOGGER.warn("Failed to obtain repository {}", this, e);

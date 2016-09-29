@@ -1,18 +1,22 @@
 package com.cloudbees.jenkins;
 
-import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
 import hudson.EnvVars;
 import hudson.Extension;
 import hudson.Util;
 import hudson.XmlFile;
-import hudson.console.AnnotatedLargeText;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
-import hudson.model.Item;
+import hudson.model.CauseAction;
 import hudson.model.EnvironmentContributor;
+import hudson.model.Item;
 import hudson.model.Job;
+import hudson.model.ParameterDefinition;
+import hudson.model.ParameterValue;
+import hudson.model.ParametersAction;
+import hudson.model.ParametersDefinitionProperty;
 import hudson.model.Project;
+import hudson.model.StringParameterValue;
 import hudson.model.TaskListener;
 import hudson.plugins.git.BranchSpec;
 import hudson.plugins.git.GitSCM;
@@ -27,9 +31,7 @@ import jenkins.model.Jenkins;
 import jenkins.model.ParameterizedJobMixIn;
 import jenkins.triggers.SCMTriggerItem;
 import jenkins.triggers.SCMTriggerItem.SCMTriggerItems;
-import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
-import org.apache.commons.jelly.XMLOutput;
 import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.github.GitHubPlugin;
@@ -38,6 +40,8 @@ import org.jenkinsci.plugins.github.config.GitHubPluginConfig;
 import org.jenkinsci.plugins.github.internal.GHPluginConfigException;
 import org.jenkinsci.plugins.github.migration.Migrator;
 import org.kohsuke.github.GHEvent;
+import org.kohsuke.github.GHPullRequest;
+import org.kohsuke.github.GHRepository;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.slf4j.Logger;
@@ -48,6 +52,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -63,10 +68,40 @@ import static org.jenkinsci.plugins.github.util.JobInfoHelpers.asParameterizedJo
  *
  * @author Kohsuke Kawaguchi
  */
-public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigger {
+public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitHubTrigger {
+
+    class GitHubPullRequestCheckResult {
+        private Integer pullId;
+        private String headSha;
+
+        public GitHubPullRequestCheckResult() {
+            this(0, null);
+        }
+
+        public GitHubPullRequestCheckResult(Integer pullId, String headSha) {
+            this.setPullId(pullId);
+            this.setHeadSha(headSha);
+        }
+
+        public Integer getPullId() {
+            return pullId;
+        }
+
+        public void setPullId(Integer prNumber) {
+            this.pullId = prNumber;
+        }
+
+        public String getHeadSha() {
+            return headSha;
+        }
+
+        public void setHeadSha(String headSha) {
+            this.headSha = headSha;
+        }
+    }
 
     @DataBoundConstructor
-    public GitHubPushTrigger() {
+    public GitHubPullRequestTrigger() {
     }
 
     /**
@@ -89,110 +124,152 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         return env;
     }
 
-    public boolean containsNonDocs(final JSONArray changes) {
-        for (int i = 0; i < changes.size(); i++) {
-            String change = (String) changes.get(i);
-            if (!change.startsWith("docs/") && !change.equals("README.md")) {
-                return true;
+    private ArrayList<ParameterValue> getDefaultParameters() {
+        ArrayList<ParameterValue> values = new ArrayList<>();
+        ParametersDefinitionProperty pdp = this.job.getProperty(ParametersDefinitionProperty.class);
+        if (pdp != null) {
+            for (ParameterDefinition pd : pdp.getParameterDefinitions()) {
+                if (pd.getName().equals("sha1")) {
+                    continue;
+                }
+                values.add(pd.getDefaultParameterValue());
             }
         }
-        return false;
+        return values;
     }
 
-    public boolean containsOnlyDocChanges(final JSONObject postJson) {
-        JSONArray commits = postJson.getJSONArray("commits");
-        for (int i = 0; i < commits.size(); i++) {
-            JSONObject commit = commits.getJSONObject(i);
-            if (containsNonDocs(commit.getJSONArray("added"))) {
-                return false;
-            }
-            if (containsNonDocs(commit.getJSONArray("modified"))) {
-                return false;
-            }
-            if (containsNonDocs(commit.getJSONArray("removed"))) {
-                return false;
-            }
-        }
-        return true;
+    private List<ParameterValue> getParametersFromCheckResult(GitHubPullRequestCheckResult checkResult) {
+        ArrayList values = getDefaultParameters();
+
+        values.add(new StringParameterValue("sha1", checkResult.getHeadSha()));
+        values.add(new StringParameterValue("PULL_ID", checkResult.getPullId().toString()));
+        values.add(new StringParameterValue("GIT_COMMIT", checkResult.getHeadSha()));
+        values.add(new StringParameterValue("GIT_COMMITTER", checkResult.getCommitter()));
+        values.add(new StringParameterValue("GIT_COMMITTER", checkResult.getCommitter()));
+
+        return values;
     }
 
     /**
      * Called when a POST is made.
      */
-    public void onPost(final JSONObject postJson, GHEvent event, final GitHubRepositoryName changedRepository) {
+    public void onPost(final JSONObject postJson, final GHEvent event, final GitHubRepositoryName changedRepository) {
         getDescriptor().queue.execute(new Runnable() {
-            private boolean runCheck() {
+            private GitHubPullRequestCheckResult runCheck() {
                 try {
-                    String ref = postJson.getString("ref");
-                    if (containsOnlyDocChanges(postJson)) {
-                        LOGGER.info("contains only docs changes, skipping");
-                        return false;
-                    }
-
-                    String comment = postJson.getJSONObject("head_commit").getString("message");
-                    if (comment.indexOf("#dontbuild") > -1 || comment.indexOf("#nocicd") > -1) {
-                        LOGGER.info("contains #dontbuild/#nocicd hashtag, skipping");
-                        return false;
-                    }
-
-                    String[] refParts = ref.split("/");
-                    String branchName = refParts[refParts.length - 1];
 
                     SCMTriggerItem item = SCMTriggerItems.asSCMTriggerItem(job);
-                    EnvVars envVars = buildEnv(job);
-                    if (item != null) {
-                        for (SCM scm : item.getSCMs()) {
-                            if (scm instanceof GitSCM) {
-                                GitSCM git = (GitSCM) scm;
-                                for (RemoteConfig rc : git.getRepositories()) {
-                                    String originBranch = rc.getName() + "/" + branchName;
-                                    for (URIish uri : rc.getURIs()) {
-                                        String url = envVars.expand(uri.toString());
-                                        GitHubRepositoryName repo = GitHubRepositoryName.create(url);
-                                        if (repo != null) {
-                                            for (BranchSpec branch : git.getBranches()) {
-                                                LOGGER.debug("Checking branch " + branch.getName());
-                                                if (branch.matches(ref, envVars)) {
-                                                    LOGGER.debug("Matches branch " + branch.getName());
-                                                    return true;
-                                                } else if (branch.matches(originBranch, envVars)) {
-                                                    LOGGER.debug("Matches origin branch " + branch.getName());
-                                                    return true;
-                                                } else {
-                                                    LOGGER.debug("Does not match branch " + branch.getName());
-                                                }
-                                            }
-                                        }
-                                    }
+                    LOGGER.info("SCMItem {}", item.getSCMs().size());
+                    for (SCM scm : item.getSCMs()) {
+                        if (GitSCM.class.isInstance(scm)) {
+                            GitSCM git = (GitSCM) scm;
+                            for (RemoteConfig rc : git.getRepositories()) {
+                                for (URIish uri : rc.getURIs()) {
+                                    LOGGER.info("GitURI {}, remote name {}", uri, rc.getName());
                                 }
+                            }
+
+                            for (BranchSpec branchSpec : git.getBranches()) {
+                                LOGGER.info("branch name {}", branchSpec.getName());
+                            }
+
+                        }
+                    }
+//                    EnvVars envVars = buildEnv(job);
+//
+//                    if (item != null) {
+//                        for (SCM scm : item.getSCMs()) {
+//                            if (scm instanceof GitSCM) {
+//                                GitSCM git = (GitSCM) scm;
+//                                for (RemoteConfig rc : git.getRepositories()) {
+//                                    for (URIish uri : rc.getURIs()) {
+//                                        String url = envVars.expand(uri.toString());
+//                                        GitHubRepositoryName repo = GitHubRepositoryName.create(url);
+//                                        if (repo != null) {
+
+                    String headSha = null;
+                    Integer prNumber = 0;
+
+                    if (event == GHEvent.PULL_REQUEST) {
+                        String action = postJson.getString("action");
+                        if ("opened".equals(action) || "synchronize".equals(action)) {
+
+                            JSONObject prObj = postJson.getJSONObject("pull_request");
+                            prNumber = Integer.parseInt(prObj.getString("number"));
+
+                            if (Boolean.parseBoolean(prObj.getString("merged"))) {
+                                headSha = "origin/pr/" + prNumber + "/merge";
+                            } else {
+                                headSha = prObj.getJSONObject("head").getString("sha");
+                            }
+                        }
+                    } else if (event == GHEvent.ISSUE_COMMENT) {
+
+                        GHRepository ghrepo = changedRepository.resolveOne();
+
+                        if (ghrepo == null) {
+                            LOGGER.info("GitHub Server not found in Global Settings. "
+                                    + "Skipping issue_comment Pull Request trigger.");
+                            return null;
+                        }
+
+                        JSONObject issue = postJson.getJSONObject("issue");
+                        JSONObject comment = postJson.getJSONObject("comment");
+                        String commentBody = comment.getString("body");
+
+                        LOGGER.info("ghrepo {}", ghrepo);
+
+                        if (commentBody.toLowerCase().contains("test this please")) {
+                            prNumber = issue.getInt("number");
+                            GHPullRequest pr = ghrepo.getPullRequest(prNumber);
+                            if (pr.isMerged()) {
+                                headSha = "origin/pr/" + prNumber.toString() + "/merge";
+                            } else {
+                                headSha = pr.getHead().getSha();
                             }
                         }
                     }
-                    return false;
+                    if (headSha != null && prNumber > 0) {
+                        return new GitHubPullRequestCheckResult(prNumber, headSha);
+                    }
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    }
                 } catch (Error e) {
-                    LOGGER.error("Failed to check branches", e);
+                    LOGGER.error("Failed to check pull request", e);
                     throw e;
                 } catch (RuntimeException e) {
-                    LOGGER.error("Failed to check branches", e);
+                    LOGGER.error("Failed to check pull request", e);
                     throw e;
+                } catch (IOException e) {
+                    LOGGER.error("Failed to check pull request", e);
                 }
+
+                return null;
             }
 
             public void run() {
-                if (runCheck()) {
-                    GitHubPushCause cause;
-                    final String pusherName = postJson.getJSONObject("pusher").getString("name");
+                GitHubPullRequestCheckResult checkResult = runCheck();
+                if (checkResult != null) {
+                    LOGGER.info("should trigger using {}, {}", checkResult.getPullId(), checkResult.getHeadSha());
+                    GitHubPullRequestCause cause = new GitHubPullRequestCause(checkResult.getPullId());
+
                     try {
-                        cause = new GitHubPushCause(getLogFile(), pusherName);
-                    } catch (IOException e) {
-                        LOGGER.warn("Failed to parse the polling log", e);
-                        cause = new GitHubPushCause(pusherName);
-                    }
-                    if (asParameterizedJobMixIn(job).scheduleBuild(cause)) {
-                        LOGGER.info("SCM changes detected in " + job.getFullName()
-                                + ". Triggering #" + job.getNextBuildNumber());
-                    } else {
-                        LOGGER.info("SCM changes detected in " + job.getFullName() + ". Job is already in the queue");
+
+                        if (asParameterizedJobMixIn(job).scheduleBuild2(0,
+                                new CauseAction(cause),
+                                new ParametersAction(getParametersFromCheckResult(checkResult))) != null) {
+                            LOGGER.info("Pull request detected in " + job.getFullName()
+                                    + ". Triggering #" + job.getNextBuildNumber());
+                        } else {
+                            LOGGER.info("Pull request detected in " + job.getFullName()
+                                    + ". Job is already in the queue");
+                        }
+                    } catch (Exception e) {
+                        LOGGER.error("failed to schedule build", e);
                     }
                 }
             }
@@ -284,16 +361,6 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         public String getLog() throws IOException {
             return Util.loadFile(getLogFile());
         }
-
-        /**
-         * Writes the annotated log to the given output.
-         *
-         * @since 1.350
-         */
-        public void writeLogTo(XMLOutput out) throws IOException {
-            new AnnotatedLargeText<GitHubWebHookPollingAction>(getLogFile(), Charsets.UTF_8, true, this)
-                    .writeHtmlTo(0, out.asWriter());
-        }
     }
 
     @Extension
@@ -342,7 +409,7 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
 
         @Override
         public String getDisplayName() {
-            return "Build when a change is pushed to GitHub";
+            return "Build when a Pull Request is submitted to GitHub";
         }
 
         /**
@@ -433,7 +500,7 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         }
 
         private static ThreadFactory threadFactory() {
-            return new NamingThreadFactory(Executors.defaultThreadFactory(), "GitHubPushTrigger");
+            return new NamingThreadFactory(Executors.defaultThreadFactory(), "GitHubPullRequestTrigger");
         }
 
         /**
@@ -468,8 +535,8 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
      * Set to false to prevent the user from overriding the hook URL.
      */
     public static final boolean ALLOW_HOOKURL_OVERRIDE = !Boolean.getBoolean(
-            GitHubPushTrigger.class.getName() + ".disableOverride"
+            GitHubPullRequestTrigger.class.getName() + ".disableOverride"
     );
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(GitHubPushTrigger.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(GitHubPullRequestTrigger.class);
 }

@@ -1,11 +1,17 @@
 package org.jenkinsci.plugins.github.extension;
 
+import com.cloudbees.jenkins.GitHubRepositoryName;
 import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import hudson.ExtensionList;
 import hudson.ExtensionPoint;
 import hudson.model.Job;
+import hudson.plugins.git.GitSCM;
+import hudson.scm.SCM;
 import jenkins.model.Jenkins;
+import jenkins.triggers.SCMTriggerItem;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.github.util.misc.NullSafeFunction;
 import org.jenkinsci.plugins.github.util.misc.NullSafePredicate;
 import org.kohsuke.github.GHEvent;
@@ -14,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Set;
 
@@ -116,6 +123,23 @@ public abstract class GHEventsSubscriber implements ExtensionPoint {
                 return defaultIfNull(subscriber.events(), emptySet()).contains(event);
             }
         };
+    }
+
+    public static ArrayList<GitHubRepositoryName> getRepositoryNames(Job<?, ?> job) {
+        ArrayList<GitHubRepositoryName> list = new ArrayList<>();
+
+        SCMTriggerItem item = SCMTriggerItem.SCMTriggerItems.asSCMTriggerItem(job);
+        for (SCM scm : item.getSCMs()) {
+            if (GitSCM.class.isInstance(scm)) {
+                GitSCM git = (GitSCM) scm;
+                for (RemoteConfig rc : git.getRepositories()) {
+                    for (URIish uri : rc.getURIs()) {
+                        list.add(GitHubRepositoryName.create(uri.toString()));
+                    }
+                }
+            }
+        }
+        return list;
     }
 
     /**

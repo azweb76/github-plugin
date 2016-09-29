@@ -9,6 +9,8 @@ import hudson.model.Job;
 import hudson.triggers.Trigger;
 import jenkins.model.ParameterizedJobMixIn;
 import org.jenkinsci.plugins.github.extension.GHEventsSubscriber;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.CheckForNull;
 import java.util.Collection;
@@ -23,6 +25,8 @@ import static org.jenkinsci.plugins.github.util.FluentIterableWrapper.from;
  * @since 1.12.0
  */
 public final class JobInfoHelpers {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(JobInfoHelpers.class);
 
     private JobInfoHelpers() {
         throw new IllegalAccessError("Do not instantiate it");
