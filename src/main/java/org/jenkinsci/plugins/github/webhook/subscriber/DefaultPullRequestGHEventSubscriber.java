@@ -22,7 +22,6 @@ import static org.jenkinsci.plugins.github.util.JobInfoHelpers.triggerFrom;
 import static org.jenkinsci.plugins.github.util.JobInfoHelpers.withTrigger;
 import static org.kohsuke.github.GHEvent.ISSUE_COMMENT;
 import static org.kohsuke.github.GHEvent.PULL_REQUEST;
-import static org.kohsuke.github.GHEvent.PUSH;
 
 /**
  * By default this plugin interested in push events only when job uses {@link GitHubPushTrigger}
@@ -52,7 +51,7 @@ public class DefaultPullRequestGHEventSubscriber extends GHEventsSubscriber {
      */
     @Override
     protected Set<GHEvent> events() {
-        return immutableEnumSet(PULL_REQUEST, ISSUE_COMMENT, PUSH);
+        return immutableEnumSet(PULL_REQUEST, ISSUE_COMMENT);
     }
 
     /**
@@ -79,7 +78,6 @@ public class DefaultPullRequestGHEventSubscriber extends GHEventsSubscriber {
                 @Override
                 public void run() {
                     for (Job<?, ?> job : Jenkins.getInstance().getAllItems(Job.class)) {
-                        LOGGER.info("scanning job {}", job.getName());
                         GitHubTrigger trigger = triggerFrom(job, GitHubPullRequestTrigger.class);
                         if (trigger != null) {
                             ArrayList<GitHubRepositoryName> repoNames = getRepositoryNames(job);

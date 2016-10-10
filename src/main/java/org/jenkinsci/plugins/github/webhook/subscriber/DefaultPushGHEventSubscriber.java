@@ -20,8 +20,6 @@ import java.util.Set;
 import static com.google.common.collect.Sets.immutableEnumSet;
 import static org.jenkinsci.plugins.github.util.JobInfoHelpers.triggerFrom;
 import static org.jenkinsci.plugins.github.util.JobInfoHelpers.withTrigger;
-import static org.kohsuke.github.GHEvent.ISSUE_COMMENT;
-import static org.kohsuke.github.GHEvent.PULL_REQUEST;
 import static org.kohsuke.github.GHEvent.PUSH;
 
 /**
@@ -52,7 +50,7 @@ public class DefaultPushGHEventSubscriber extends GHEventsSubscriber {
      */
     @Override
     protected Set<GHEvent> events() {
-        return immutableEnumSet(PULL_REQUEST, ISSUE_COMMENT, PUSH);
+        return immutableEnumSet(PUSH);
     }
 
     /**

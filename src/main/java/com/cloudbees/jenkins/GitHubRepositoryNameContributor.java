@@ -88,7 +88,6 @@ public abstract class GitHubRepositoryNameContributor implements ExtensionPoint 
     public static Collection<GitHubRepositoryName> parseAssociatedNames(Job<?, ?> job) {
         Set<GitHubRepositoryName> names = new HashSet<GitHubRepositoryName>();
         for (GitHubRepositoryNameContributor c : all()) {
-            LOGGER.info("associatedNames {}", c);
             c.parseAssociatedNames(job, names);
         }
 
@@ -130,7 +129,6 @@ public abstract class GitHubRepositoryNameContributor implements ExtensionPoint 
                     for (URIish uri : rc.getURIs()) {
                         String url = env.expand(uri.toString());
                         GitHubRepositoryName repo = GitHubRepositoryName.create(url);
-                        LOGGER.info("addRepositories {}", url);
                         if (repo != null) {
                             r.add(repo);
                         }

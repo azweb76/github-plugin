@@ -3,7 +3,6 @@ package com.cloudbees.jenkins;
 import com.google.common.base.Preconditions;
 import hudson.EnvVars;
 import hudson.Extension;
-import hudson.Util;
 import hudson.XmlFile;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
@@ -15,12 +14,8 @@ import hudson.model.ParameterDefinition;
 import hudson.model.ParameterValue;
 import hudson.model.ParametersAction;
 import hudson.model.ParametersDefinitionProperty;
-import hudson.model.Project;
 import hudson.model.StringParameterValue;
 import hudson.model.TaskListener;
-import hudson.plugins.git.BranchSpec;
-import hudson.plugins.git.GitSCM;
-import hudson.scm.SCM;
 import hudson.triggers.SCMTrigger;
 import hudson.triggers.Trigger;
 import hudson.triggers.TriggerDescriptor;
@@ -29,28 +24,19 @@ import hudson.util.NamingThreadFactory;
 import hudson.util.SequentialExecutionQueue;
 import jenkins.model.Jenkins;
 import jenkins.model.ParameterizedJobMixIn;
-import jenkins.triggers.SCMTriggerItem;
-import jenkins.triggers.SCMTriggerItem.SCMTriggerItems;
 import net.sf.json.JSONObject;
-import org.eclipse.jgit.transport.RemoteConfig;
-import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.github.GitHubPlugin;
 import org.jenkinsci.plugins.github.admin.GitHubHookRegisterProblemMonitor;
 import org.jenkinsci.plugins.github.config.GitHubPluginConfig;
 import org.jenkinsci.plugins.github.internal.GHPluginConfigException;
 import org.jenkinsci.plugins.github.migration.Migrator;
-import org.kohsuke.github.GHCommitPointer;
 import org.kohsuke.github.GHEvent;
-import org.kohsuke.github.GHPullRequest;
-import org.kohsuke.github.GHRepository;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
-import java.io.File;
-import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -69,85 +55,43 @@ import static org.jenkinsci.plugins.github.util.JobInfoHelpers.asParameterizedJo
  *
  * @author Kohsuke Kawaguchi
  */
-public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitHubTrigger {
+public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHubTrigger {
 
-    class GitHubPullRequestCheckResult {
-        private Integer pullId;
-        private String headSha;
-        private String pullUrl;
-        private String committer;
-        private String branch;
-        private String commit;
-        private String comment;
+    class GitHubRepositoryCheckResult {
+        private String repository;
+        private String action;
+        private String organization;
 
-        public GitHubPullRequestCheckResult() {
-            this(0, null);
+        public GitHubRepositoryCheckResult() {
         }
 
-        public GitHubPullRequestCheckResult(Integer pullId, String headSha) {
-            this.setPullId(pullId);
-            this.setHeadSha(headSha);
+        public String getRepository() {
+            return repository;
         }
 
-        public Integer getPullId() {
-            return pullId;
+        public void setRepository(String repository) {
+            this.repository = repository;
         }
 
-        public void setPullId(Integer prNumber) {
-            this.pullId = prNumber;
+        public String getAction() {
+            return action;
         }
 
-        public String getHeadSha() {
-            return headSha;
+        public void setAction(String action) {
+            this.action = action;
         }
 
-        public void setHeadSha(String headSha) {
-            this.headSha = headSha;
+        public String getOrganization() {
+            return organization;
         }
 
-        public String getPullUrl() {
-            return pullUrl;
-        }
-
-        public void setPullUrl(String pullUrl) {
-            this.pullUrl = pullUrl;
-        }
-
-        public String getCommitter() {
-            return committer;
-        }
-
-        public void setCommitter(String committer) {
-            this.committer = committer;
-        }
-
-        public String getBranch() {
-            return branch;
-        }
-
-        public void setBranch(String branch) {
-            this.branch = branch;
-        }
-
-        public String getCommit() {
-            return commit;
-        }
-
-        public void setCommit(String commit) {
-            this.commit = commit;
-        }
-
-        public String getComment() {
-            return comment;
-        }
-
-        public void setComment(String comment) {
-            this.comment = comment;
+        public void setOrganization(String organization) {
+            this.organization = organization;
         }
     }
 
     @DataBoundConstructor
-    public GitHubPullRequestTrigger() {
+    public GitHubRepositoryTrigger() {
     }
 
     /**
@@ -184,20 +128,12 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
         return values;
     }
 
-    private List<ParameterValue> getParametersFromCheckResult(GitHubPullRequestCheckResult checkResult) {
+    private List<ParameterValue> getParametersFromCheckResult(GitHubRepositoryCheckResult checkResult) {
         ArrayList values = getDefaultParameters();
 
-        values.add(new StringParameterValue("sha1", checkResult.getHeadSha()));
-        values.add(new StringParameterValue("PULL_ID", checkResult.getPullId().toString()));
-        values.add(new StringParameterValue("PULL_URL", checkResult.getPullUrl()));
-        values.add(new StringParameterValue("GIT_COMMIT", checkResult.getCommit()));
-        values.add(new StringParameterValue("GIT_COMMITTER", checkResult.getCommitter()));
-        values.add(new StringParameterValue("GIT_BRANCH", checkResult.getBranch()));
-
-        String comment = checkResult.getComment();
-        if (comment != null) {
-            values.add(new StringParameterValue("PULL_COMMENT", comment));
-        }
+        values.add(new StringParameterValue("GIT_ORG", checkResult.getOrganization()));
+        values.add(new StringParameterValue("GIT_REPO", checkResult.getRepository()));
+        values.add(new StringParameterValue("GIT_ACTION", checkResult.getAction()));
 
         return values;
     }
@@ -205,121 +141,53 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
     /**
      * Called when a POST is made.
      */
-    public void onPost(final JSONObject postJson, final GHEvent event, final GitHubRepositoryName changedRepository) {
+    public void onPost(final JSONObject postJson, final GHEvent event,
+                       final GitHubRepositoryName changedRepository) {
         getDescriptor().queue.execute(new Runnable() {
-            private GitHubPullRequestCheckResult runCheck() {
+            private GitHubRepositoryCheckResult runCheck() {
                 try {
 
-                    GitHubPullRequestCheckResult prResult = new GitHubPullRequestCheckResult();
-
-                    SCMTriggerItem item = SCMTriggerItems.asSCMTriggerItem(job);
-                    LOGGER.info("SCMItem {}", item.getSCMs().size());
-                    for (SCM scm : item.getSCMs()) {
-                        if (GitSCM.class.isInstance(scm)) {
-                            GitSCM git = (GitSCM) scm;
-                            for (RemoteConfig rc : git.getRepositories()) {
-                                for (URIish uri : rc.getURIs()) {
-                                    LOGGER.info("GitURI {}, remote name {}", uri, rc.getName());
-                                }
-                            }
-
-                            for (BranchSpec branchSpec : git.getBranches()) {
-                                LOGGER.info("branch name {}", branchSpec.getName());
-                            }
-
-                        }
-                    }
+                    GitHubRepositoryCheckResult prResult = new GitHubRepositoryCheckResult();
 
                     String headSha = null;
                     Integer prNumber = 0;
 
-                    if (event == GHEvent.PULL_REQUEST) {
+                    if (event == GHEvent.REPOSITORY) {
                         String action = postJson.getString("action");
-                        if ("opened".equals(action) || "synchronize".equals(action)) {
-                            JSONObject prObj = postJson.getJSONObject("pull_request");
-                            prNumber = Integer.parseInt(prObj.getString("number"));
-                            JSONObject headObj = prObj.getJSONObject("head");
 
-                            if (Boolean.parseBoolean(prObj.getString("merged"))) {
-                                headSha = "origin/pr/" + prNumber + "/merge";
-                            } else {
-                                headSha = headObj.getString("sha");
-                            }
+                        prResult.setAction(action);
+                        prResult.setOrganization(postJson.getJSONObject("organization").getString("login"));
+                        prResult.setRepository(postJson.getJSONObject("repository").getString("name"));
 
-                            prResult.setPullId(prNumber);
-                            prResult.setPullUrl(prObj.getString("html_url"));
-                            prResult.setCommitter(prObj.getJSONObject("user").getString("login"));
-                            prResult.setBranch(headObj.getString("ref"));
-                            prResult.setCommit(headObj.getString("sha"));
-                            prResult.setHeadSha(headSha);
-                        }
-                    } else if (event == GHEvent.ISSUE_COMMENT) {
-
-                        GHRepository ghrepo = changedRepository.resolveOne();
-
-                        if (ghrepo == null) {
-                            LOGGER.info("GitHub Server not found in Global Settings. "
-                                    + "Skipping issue_comment Pull Request trigger.");
-                            return null;
-                        }
-
-                        JSONObject issue = postJson.getJSONObject("issue");
-                        JSONObject comment = postJson.getJSONObject("comment");
-                        String commentBody = comment.getString("body");
-
-                        LOGGER.info("ghrepo {}", ghrepo);
-
-                        if (commentBody.toLowerCase().contains("test this please")) {
-                            prNumber = issue.getInt("number");
-                            GHPullRequest pr = ghrepo.getPullRequest(prNumber);
-                            if (pr.isMerged()) {
-                                headSha = "origin/pr/" + prNumber.toString() + "/merge";
-                            } else {
-                                headSha = pr.getHead().getSha();
-                            }
-
-                            GHCommitPointer head = pr.getHead();
-
-                            prResult.setComment(commentBody);
-                            prResult.setPullId(prNumber);
-                            prResult.setPullUrl(pr.getHtmlUrl().toString());
-                            prResult.setCommitter(pr.getUser().getLogin());
-                            prResult.setBranch(head.getRef());
-                            prResult.setCommit(head.getSha());
-                            prResult.setHeadSha(headSha);
-                        }
-                    }
-                    if (prResult.getHeadSha() != null && prResult.getPullId() > 0) {
                         return prResult;
                     }
+                    return null;
+
                 } catch (Error e) {
-                    LOGGER.error("Failed to check pull request", e);
+                    LOGGER.error("Failed to check repository event", e);
                     throw e;
                 } catch (RuntimeException e) {
-                    LOGGER.error("Failed to check pull request", e);
+                    LOGGER.error("Failed to check repository event", e);
                     throw e;
-                } catch (IOException e) {
-                    LOGGER.error("Failed to check pull request", e);
                 }
-
-                return null;
             }
 
             public void run() {
-                GitHubPullRequestCheckResult checkResult = runCheck();
+                GitHubRepositoryCheckResult checkResult = runCheck();
                 if (checkResult != null) {
-                    LOGGER.info("should trigger using {}, {}", checkResult.getPullId(), checkResult.getHeadSha());
-                    GitHubPullRequestCause cause = new GitHubPullRequestCause(checkResult.getPullId());
+                    LOGGER.info("should trigger using {}, {}", checkResult.getRepository(),
+                            checkResult.getOrganization());
+                    GitHubRepositoryCause cause = new GitHubRepositoryCause(checkResult.getAction());
 
                     try {
 
                         if (asParameterizedJobMixIn(job).scheduleBuild2(0,
                                 new CauseAction(cause),
                                 new ParametersAction(getParametersFromCheckResult(checkResult))) != null) {
-                            LOGGER.info("Pull request detected in " + job.getFullName()
+                            LOGGER.info("Repository event detected in " + job.getFullName()
                                     + ". Triggering #" + job.getNextBuildNumber());
                         } else {
-                            LOGGER.info("Pull request detected in " + job.getFullName()
+                            LOGGER.info("Repository event detected in " + job.getFullName()
                                     + ". Job is already in the queue");
                         }
                     } catch (Exception e) {
@@ -328,13 +196,6 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
                 }
             }
         });
-    }
-
-    /**
-     * Returns the file that records the last/current polling activity.
-     */
-    public File getLogFile() {
-        return new File(job.getRootDir(), "github-polling.log");
     }
 
     /**
@@ -380,41 +241,12 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
 
     @Override
     public Collection<? extends Action> getProjectActions() {
-        if (job == null) {
-            return Collections.emptyList();
-        }
-
-        return Collections.singleton(new GitHubWebHookPollingAction());
+        return Collections.emptyList();
     }
 
     @Override
     public DescriptorImpl getDescriptor() {
         return (DescriptorImpl) super.getDescriptor();
-    }
-
-    /**
-     * Action object for {@link Project}. Used to display the polling log.
-     */
-    public final class GitHubWebHookPollingAction implements Action {
-        public Job<?, ?> getOwner() {
-            return job;
-        }
-
-        public String getIconFileName() {
-            return "clipboard.png";
-        }
-
-        public String getDisplayName() {
-            return "GitHub Hook Log";
-        }
-
-        public String getUrlName() {
-            return "GitHubPollLog";
-        }
-
-        public String getLog() throws IOException {
-            return Util.loadFile(getLogFile());
-        }
     }
 
     @Extension
@@ -457,13 +289,13 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
 
         @Override
         public boolean isApplicable(Item item) {
-            return item instanceof Job && SCMTriggerItems.asSCMTriggerItem(item) != null
+            return item instanceof Job
                     && item instanceof ParameterizedJobMixIn.ParameterizedJob;
         }
 
         @Override
         public String getDisplayName() {
-            return "Build when a Pull Request is submitted to GitHub";
+            return "Build when a repository event occurs on GitHub";
         }
 
         /**
@@ -473,7 +305,7 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
          */
         @Deprecated
         public boolean isManageHook() {
-            return GitHubPlugin.configuration().isManageHooks();
+            return false;
         }
 
         /**
@@ -570,17 +402,6 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
         public FormValidation doCheckHookRegistered(@AncestorInPath Job<?, ?> job) {
             Preconditions.checkNotNull(job, "Job can't be null if wants to check hook in monitor");
 
-            Collection<GitHubRepositoryName> repos = GitHubRepositoryNameContributor.parseAssociatedNames(job);
-
-            for (GitHubRepositoryName repo : repos) {
-                if (monitor.isProblemWith(repo)) {
-                    return FormValidation.warning(
-                            org.jenkinsci.plugins.github.Messages.github_trigger_check_method_warning_details(
-                                    repo.getUserName(), repo.getRepositoryName(), repo.getHost()
-                            ));
-                }
-            }
-
             return FormValidation.ok();
         }
     }
@@ -589,8 +410,8 @@ public class GitHubPullRequestTrigger extends Trigger<Job<?, ?>> implements GitH
      * Set to false to prevent the user from overriding the hook URL.
      */
     public static final boolean ALLOW_HOOKURL_OVERRIDE = !Boolean.getBoolean(
-            GitHubPullRequestTrigger.class.getName() + ".disableOverride"
+            GitHubRepositoryTrigger.class.getName() + ".disableOverride"
     );
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(GitHubPullRequestTrigger.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(GitHubRepositoryTrigger.class);
 }
