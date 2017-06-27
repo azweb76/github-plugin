@@ -1,5 +1,10 @@
 package com.cloudbees.jenkins;
 
+import javax.servlet.http.HttpServletRequest;
+
+import org.kohsuke.github.GHEvent;
+import org.kohsuke.github.GHEventPayload;
+
 import jenkins.scm.api.SCMEvent;
 
 /**
@@ -22,10 +27,20 @@ public class GitHubTriggerEvent {
      */
     private final String triggeredByUser;
 
-    private GitHubTriggerEvent(long timestamp, String origin, String triggeredByUser) {
+    private final GitHubRepositoryName repositoryName;
+
+    private final GHEventPayload payload;
+
+    private final GHEvent ghEvent;
+
+    private GitHubTriggerEvent(long timestamp, String origin, String triggeredByUser,
+        GitHubRepositoryName repositoryName, GHEventPayload payload, GHEvent ghEvent) {
         this.timestamp = timestamp;
         this.origin = origin;
         this.triggeredByUser = triggeredByUser;
+        this.repositoryName = repositoryName;
+        this.payload = payload;
+        this.ghEvent = ghEvent;
     }
 
     public static Builder create() {
@@ -42,6 +57,18 @@ public class GitHubTriggerEvent {
 
     public String getTriggeredByUser() {
         return triggeredByUser;
+    }
+
+    public GitHubRepositoryName getRepositoryName() {
+        return repositoryName;
+    }
+
+    public GHEventPayload getPayload() {
+        return payload;
+    }
+
+    public GHEvent getGHEvent() {
+        return ghEvent;
     }
 
     @Override
@@ -88,6 +115,9 @@ public class GitHubTriggerEvent {
         private long timestamp;
         private String origin;
         private String triggeredByUser;
+        private GitHubRepositoryName repositoryName;
+        private GHEventPayload payload;
+        private GHEvent ghEvent;
 
         private Builder() {
             timestamp = System.currentTimeMillis();
@@ -108,8 +138,23 @@ public class GitHubTriggerEvent {
             return this;
         }
 
+        public Builder withRepositoryName(GitHubRepositoryName repositoryName) {
+            this.repositoryName = repositoryName;
+            return this;
+        }
+
+        public Builder withPayload(GHEventPayload payload) {
+            this.payload = payload;
+            return this;
+        }
+
+        public Builder withGHEvent(GHEvent ghEvent) {
+            this.ghEvent = ghEvent;
+            return this;
+        }
+
         public GitHubTriggerEvent build() {
-            return new GitHubTriggerEvent(timestamp, origin, triggeredByUser);
+            return new GitHubTriggerEvent(timestamp, origin, triggeredByUser, repositoryName, payload, ghEvent);
         }
 
         @Override

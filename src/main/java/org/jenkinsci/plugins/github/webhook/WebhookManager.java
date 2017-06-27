@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.net.URL;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -191,8 +192,14 @@ public class WebhookManager {
                             .transformAndConcat(eventsFromHook()).toSet();
 
                     if (hooks.size() == 1 && isEqualCollection(alreadyRegistered, events)) {
-                        LOGGER.debug("Hook already registered for events {}", events);
-                        return null;
+                        for (Iterator<GHHook> it = hooks.iterator(); it.hasNext();) {
+                            GHHook f = it.next();
+                            if (f.getConfig().get("content_type") == "json") {
+                                LOGGER.debug("Hook already registered for events {} and set "
+                                        + "with content_type as json.", events);
+                                return null;
+                            }
+                        }
                     }
 
                     Set<GHEvent> merged = from(alreadyRegistered).append(events).toSet();

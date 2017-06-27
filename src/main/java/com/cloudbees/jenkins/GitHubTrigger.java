@@ -25,6 +25,8 @@ public interface GitHubTrigger {
     // TODO: document me
     void onPost(String triggeredByUser);
 
+    void onPost(GitHubTriggerEvent event);
+
     /**
      * Obtains the list of the repositories that this trigger is looking at.
      *

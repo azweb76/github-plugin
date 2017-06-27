@@ -2,6 +2,7 @@ package com.cloudbees.jenkins;
 
 import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
+import hudson.EnvVars;
 import hudson.Extension;
 import hudson.Util;
 import hudson.XmlFile;
@@ -9,21 +10,27 @@ import hudson.console.AnnotatedLargeText;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
 import hudson.model.Item;
+import hudson.model.EnvironmentContributor;
 import hudson.model.Job;
 import hudson.model.Project;
+import hudson.model.TaskListener;
+import hudson.plugins.git.BranchSpec;
+import hudson.plugins.git.GitSCM;
+import hudson.scm.SCM;
 import hudson.triggers.SCMTrigger;
 import hudson.triggers.Trigger;
 import hudson.triggers.TriggerDescriptor;
 import hudson.util.FormValidation;
 import hudson.util.NamingThreadFactory;
 import hudson.util.SequentialExecutionQueue;
-import hudson.util.StreamTaskListener;
 import jenkins.model.Jenkins;
 import jenkins.model.ParameterizedJobMixIn;
 import jenkins.scm.api.SCMEvent;
 import jenkins.triggers.SCMTriggerItem;
 import jenkins.triggers.SCMTriggerItem.SCMTriggerItems;
 import org.apache.commons.jelly.XMLOutput;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.github.GitHubPlugin;
 import org.jenkinsci.plugins.github.admin.GitHubHookRegisterProblemMonitor;
 import org.jenkinsci.plugins.github.config.GitHubPluginConfig;
@@ -32,6 +39,8 @@ import org.jenkinsci.plugins.github.migration.Migrator;
 import org.jenkinsci.Symbol;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
+import org.kohsuke.github.GHEventPayload;
+import org.kohsuke.github.GHEventPayload.Push.PushCommit;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.Stapler;
@@ -42,13 +51,10 @@ import javax.annotation.Nonnull;
 import javax.inject.Inject;
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.text.DateFormat;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -91,6 +97,56 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         );
     }
 
+    protected EnvVars buildEnv(Job<?, ?> job) {
+        EnvVars env = new EnvVars();
+        for (EnvironmentContributor contributor : EnvironmentContributor.all()) {
+            try {
+                contributor.buildEnvironmentFor(job, env, TaskListener.NULL);
+            } catch (Exception e) {
+                LOGGER.debug("{} failed to build env ({}), skipping", contributor.getClass(), e.getMessage(), e);
+            }
+        }
+        return env;
+    }
+
+    public boolean containsNonDocs(final List<String> changes) {
+        for (int i = 0; i < changes.size(); i++) {
+            String change = (String) changes.get(i);
+            if (!change.startsWith("docs/") && !change.equals("README.md")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean containsOnlyDocChanges(final GHEventPayload.Push payload) {
+        List<PushCommit> commits = payload.getCommits();
+        for (int i = 0; i < commits.size(); i++) {
+            PushCommit commit = commits.get(i);
+            if (containsNonDocs(commit.getAdded())) {
+                return false;
+            }
+            if (containsNonDocs(commit.getModified())) {
+                return false;
+            }
+            if (containsNonDocs(commit.getRemoved())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // /**
+    //  * Called when a POST is made.
+    //  */
+    // public void onPost(String triggeredByUser) {
+    //     onPost(GitHubTriggerEvent.create()
+    //             .withOrigin(SCMEvent.originOf(Stapler.getCurrentRequest()))
+    //             .withTriggeredByUser(triggeredByUser)
+    //             .build()
+    //     );
+    // }
+
     /**
      * Called when a POST is made.
      */
@@ -105,55 +161,82 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         DescriptorImpl d = getDescriptor();
         d.checkThreadPoolSizeAndUpdateIfNecessary();
         d.queue.execute(new Runnable() {
-            private boolean runPolling() {
+            private GHEventPayload.Push payload = (GHEventPayload.Push) event.getPayload();
+            private boolean runCheck() {
                 try {
-                    StreamTaskListener listener = new StreamTaskListener(getLogFileForJob(currentJob));
-
-                    try {
-                        PrintStream logger = listener.getLogger();
-
-                        long start = System.currentTimeMillis();
-                        logger.println("Started on " + DateFormat.getDateTimeInstance().format(new Date()));
-                        if (event.getOrigin() != null) {
-                            logger.format("Started by event from %s on %tc%n", event.getOrigin(), event.getTimestamp());
-                        }
-                        SCMTriggerItem item = SCMTriggerItems.asSCMTriggerItem(currentJob);
-                        if (null == item) {
-                            throw new IllegalStateException("Job is not an SCMTriggerItem: " + currentJob);
-                        }
-                        boolean result = item.poll(listener).hasChanges();
-                        logger.println("Done. Took " + Util.getTimeSpanString(System.currentTimeMillis() - start));
-                        if (result) {
-                            logger.println("Changes found");
-                        } else {
-                            logger.println("No changes");
-                        }
-                        return result;
-                    } catch (Error e) {
-                        e.printStackTrace(listener.error("Failed to record SCM polling"));
-                        LOGGER.error("Failed to record SCM polling", e);
-                        throw e;
-                    } catch (RuntimeException e) {
-                        e.printStackTrace(listener.error("Failed to record SCM polling"));
-                        LOGGER.error("Failed to record SCM polling", e);
-                        throw e;
-                    } finally {
-                        listener.close();
+                    String ref = payload.getRef();
+                    if (containsOnlyDocChanges(payload)) {
+                        LOGGER.info("contains only docs changes, skipping");
+                        return false;
                     }
-                } catch (IOException e) {
-                    LOGGER.error("Failed to record SCM polling", e);
+
+                    String commitMessage = null;
+                    for (PushCommit pushCommit : payload.getCommits()) {
+                        if (pushCommit.getSha() == payload.getHead()) {
+                            commitMessage = pushCommit.getMessage();
+                            break;
+                        }
+                    }
+
+                    if (commitMessage != null) {
+                        if (commitMessage.indexOf("#dontbuild") > -1 || commitMessage.indexOf("#nocicd") > -1) {
+                            LOGGER.info("contains #dontbuild/#nocicd hashtag, skipping");
+                            return false;
+                        }
+                    }
+
+                    String[] refParts = ref.split("/");
+                    String branchName = refParts[refParts.length - 1];
+
+                    SCMTriggerItem item = SCMTriggerItems.asSCMTriggerItem(job);
+                    EnvVars envVars = buildEnv(job);
+                    if (item != null) {
+                        for (SCM scm : item.getSCMs()) {
+                            if (scm instanceof GitSCM) {
+                                GitSCM git = (GitSCM) scm;
+                                for (RemoteConfig rc : git.getRepositories()) {
+                                    String originBranch = rc.getName() + "/" + branchName;
+                                    for (URIish uri : rc.getURIs()) {
+                                        String url = envVars.expand(uri.toString());
+                                        GitHubRepositoryName repo = GitHubRepositoryName.create(url);
+                                        if (repo != null) {
+                                            for (BranchSpec branch : git.getBranches()) {
+                                                LOGGER.debug("Checking branch " + branch.getName());
+                                                if (branch.matches(ref, envVars)) {
+                                                    LOGGER.debug("Matches branch " + branch.getName());
+                                                    return true;
+                                                } else if (branch.matches(originBranch, envVars)) {
+                                                    LOGGER.debug("Matches origin branch " + branch.getName());
+                                                    return true;
+                                                } else {
+                                                    LOGGER.debug("Does not match branch " + branch.getName());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                } catch (Error e) {
+                    LOGGER.error("Failed to check branches", e);
+                    throw e;
+                } catch (RuntimeException e) {
+                    LOGGER.error("Failed to check branches", e);
+                    throw e;
                 }
-                return false;
             }
 
             public void run() {
-                if (runPolling()) {
+                if (runCheck()) {
                     GitHubPushCause cause;
+                    final String pusherName = payload.getPusher().getName();
                     try {
-                        cause = new GitHubPushCause(getLogFileForJob(currentJob), pushBy);
+                        cause = new GitHubPushCause(getLogFileForJob(currentJob), pusherName);
                     } catch (IOException e) {
                         LOGGER.warn("Failed to parse the polling log", e);
-                        cause = new GitHubPushCause(pushBy);
+                        cause = new GitHubPushCause(pusherName);
                     }
 
                     if (asParameterizedJobMixIn(currentJob).scheduleBuild(cause)) {
