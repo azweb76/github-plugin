@@ -1,7 +1,5 @@
 package com.cloudbees.jenkins;
 
-import javax.servlet.http.HttpServletRequest;
-
 import org.kohsuke.github.GHEvent;
 import org.kohsuke.github.GHEventPayload;
 
