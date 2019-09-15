@@ -172,7 +172,7 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
 
                     String commitMessage = null;
                     for (PushCommit pushCommit : payload.getCommits()) {
-                        if (pushCommit.getSha() == payload.getHead()) {
+                        if (pushCommit.getSha().equals(payload.getHead())) {
                             commitMessage = pushCommit.getMessage();
                             break;
                         }
