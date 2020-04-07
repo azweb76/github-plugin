@@ -65,7 +65,6 @@ public class DefaultRepositoryGHEventSubscriber extends GHEventsSubscriber {
      * Calls {@link GitHubRepositoryTrigger} in all projects to handle this hook
      *
      * @param event   only PUSH event
-     * @param payload payload of gh-event. Never blank
      */
     @Override
     protected void onEvent(final GHSubscriberEvent event) {

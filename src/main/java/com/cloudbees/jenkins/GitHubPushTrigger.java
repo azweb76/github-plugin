@@ -109,32 +109,32 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
         return env;
     }
 
-    public boolean containsNonDocs(final List<String> changes) {
-        for (int i = 0; i < changes.size(); i++) {
-            String change = (String) changes.get(i);
-            if (!change.startsWith("docs/") && !change.equals("README.md")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public boolean containsOnlyDocChanges(final GHEventPayload.Push payload) {
-        List<PushCommit> commits = payload.getCommits();
-        for (int i = 0; i < commits.size(); i++) {
-            PushCommit commit = commits.get(i);
-            if (containsNonDocs(commit.getAdded())) {
-                return false;
-            }
-            if (containsNonDocs(commit.getModified())) {
-                return false;
-            }
-            if (containsNonDocs(commit.getRemoved())) {
-                return false;
-            }
-        }
-        return true;
-    }
+//    public boolean containsNonDocs(final List<String> changes) {
+//        for (int i = 0; i < changes.size(); i++) {
+//            String change = (String) changes.get(i);
+//            if (!change.startsWith("docs/") && !change.equals("README.md")) {
+//                return true;
+//            }
+//        }
+//        return false;
+//    }
+//
+//    public boolean containsOnlyDocChanges(final GHEventPayload.Push payload) {
+//        List<PushCommit> commits = payload.getCommits();
+//        for (int i = 0; i < commits.size(); i++) {
+//            PushCommit commit = commits.get(i);
+//            if (containsNonDocs(commit.getAdded())) {
+//                return false;
+//            }
+//            if (containsNonDocs(commit.getModified())) {
+//                return false;
+//            }
+//            if (containsNonDocs(commit.getRemoved())) {
+//                return false;
+//            }
+//        }
+//        return true;
+//    }
 
     // /**
     //  * Called when a POST is made.
@@ -165,11 +165,6 @@ public class GitHubPushTrigger extends Trigger<Job<?, ?>> implements GitHubTrigg
             private boolean runCheck() {
                 try {
                     String ref = payload.getRef();
-                    if (containsOnlyDocChanges(payload)) {
-                        LOGGER.info("contains only docs changes, skipping");
-                        return false;
-                    }
-
                     String commitMessage = null;
                     for (PushCommit pushCommit : payload.getCommits()) {
                         if (pushCommit.getSha().equals(payload.getHead())) {
