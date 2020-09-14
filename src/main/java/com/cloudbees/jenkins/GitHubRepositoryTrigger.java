@@ -59,6 +59,7 @@ public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHu
         private String repository;
         private String action;
         private String organization;
+        private String host;
 
         public GitHubRepositoryCheckResult() {
         }
@@ -85,6 +86,14 @@ public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHu
 
         public void setOrganization(String organization) {
             this.organization = organization;
+        }
+
+        public String getHost() {
+            return this.host;
+        }
+
+        public void setHost(String host) {
+            this.host = host;
         }
     }
 
@@ -133,6 +142,7 @@ public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHu
         values.add(new StringParameterValue("GIT_ORG", checkResult.getOrganization()));
         values.add(new StringParameterValue("GIT_REPO", checkResult.getRepository()));
         values.add(new StringParameterValue("GIT_ACTION", checkResult.getAction()));
+        values.add(new StringParameterValue("GIT_HOST", checkResult.getHost()));
 
         return values;
     }
@@ -149,6 +159,7 @@ public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHu
                     GitHubRepositoryCheckResult repoResult = new GitHubRepositoryCheckResult();
 
                     repoResult.setAction(repoPayload.getAction());
+                    repoResult.setHost(repoPayload.getRepository().getUrl().getHost());
                     repoResult.setOrganization(repoPayload.getOrganization().getLogin());
                     repoResult.setRepository(repoPayload.getRepository().getName());
 
