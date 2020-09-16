@@ -159,7 +159,7 @@ public class GitHubRepositoryTrigger extends Trigger<Job<?, ?>> implements GitHu
                     GitHubRepositoryCheckResult repoResult = new GitHubRepositoryCheckResult();
 
                     repoResult.setAction(repoPayload.getAction());
-                    repoResult.setHost(repoPayload.getRepository().getUrl().getHost());
+                    repoResult.setHost(repoPayload.getRepository().getHtmlUrl().getHost());
                     repoResult.setOrganization(repoPayload.getOrganization().getLogin());
                     repoResult.setRepository(repoPayload.getRepository().getName());
 
